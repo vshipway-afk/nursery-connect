@@ -1,8 +1,7 @@
 import streamlit as st
-import requests
 import pandas as pd
-
-BASE_URL = "http://127.0.0.1:8000"
+from database import SessionLocal
+import models
 
 st.set_page_config(page_title="NurseryConnect Dashboard", layout="wide")
 
@@ -73,45 +72,55 @@ else:
     if menu == "View Children":
         st.subheader("📋 Nursery Rooms & Children Directory")
         try:
-            res = requests.get(f"{BASE_URL}/children/")
-            if res.status_code == 200:
-                children = res.json()
-                if children:
-                    search_query = st.text_input("🔍 Search child by name or room:", "").lower()
+            db = SessionLocal()
+            children_records = db.query(models.Child).all()
+            db.close()
 
-                    filtered_children = [
-                        c for c in children
-                        if search_query in c['first_name'].lower()
-                           or search_query in c['last_name'].lower()
-                           or search_query.lower() in c.get('room_name', '').lower()
-                    ]
+            if children_records:
+                children = [
+                    {
+                        "id": c.id,
+                        "first_name": c.first_name,
+                        "last_name": c.last_name,
+                        "room_name": c.room_name,
+                        "allergies": getattr(c, "allergies", "None")
+                    }
+                    for c in children_records
+                ]
 
-                    if filtered_children:
-                        df = pd.DataFrame(filtered_children)
-                        csv_data = df.to_csv(index=False).encode('utf-8')
-                        st.download_button(
-                            label="📥 Download Child Register (CSV)",
-                            data=csv_data,
-                            file_name="nursery_children_register.csv",
-                            mime="text/csv",
-                        )
-                        st.divider()
+                search_query = st.text_input("🔍 Search child by name or room:", "").lower()
 
-                        unique_rooms = set(c['room_name'] for c in filtered_children if c.get('room_name'))
-                        for room in unique_rooms:
-                            with st.expander(f"🚪 Room: {room}"):
-                                room_children = [c for c in filtered_children if c.get('room_name') == room]
-                                for child in room_children:
-                                    st.write(
-                                        f"- **ID:** {child['id']} | **Name:** {child['first_name']} {child['last_name']} | **Allergies:** {child.get('allergies', 'None')}")
-                    else:
-                        st.warning("No matching children or rooms found.")
+                filtered_children = [
+                    c for c in children
+                    if search_query in c['first_name'].lower()
+                       or search_query in c['last_name'].lower()
+                       or search_query.lower() in c.get('room_name', '').lower()
+                ]
+
+                if filtered_children:
+                    df = pd.DataFrame(filtered_children)
+                    csv_data = df.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="📥 Download Child Register (CSV)",
+                        data=csv_data,
+                        file_name="nursery_children_register.csv",
+                        mime="text/csv",
+                    )
+                    st.divider()
+
+                    unique_rooms = set(c['room_name'] for c in filtered_children if c.get('room_name'))
+                    for room in unique_rooms:
+                        with st.expander(f"🚪 Room: {room}"):
+                            room_children = [c for c in filtered_children if c.get('room_name') == room]
+                            for child in room_children:
+                                st.write(
+                                    f"- **ID:** {child['id']} | **Name:** {child['first_name']} {child['last_name']} | **Allergies:** {child.get('allergies', 'None')}")
                 else:
-                    st.info("No children registered yet.")
+                    st.warning("No matching children or rooms found.")
             else:
-                st.error("Failed to fetch nursery records.")
+                st.info("No children registered yet.")
         except Exception as e:
-            st.error(f"Connection error: {e}")
+            st.error(f"Database error: {e}")
 
     # --- REGISTER NEW CHILD SECTION ---
     elif menu == "Register New Child":
@@ -124,17 +133,20 @@ else:
             submit_child = st.form_submit_button("Save Child Record")
 
             if submit_child:
-                payload = {
-                    "first_name": first_name,
-                    "last_name": last_name,
-                    "room_name": room_name,
-                    "allergies": allergies
-                }
-                r = requests.post(f"{BASE_URL}/children/", json=payload)
-                if r.status_code in [200, 201]:
+                try:
+                    db = SessionLocal()
+                    new_child = models.Child(
+                        first_name=first_name,
+                        last_name=last_name,
+                        room_name=room_name,
+                        allergies=allergies
+                    )
+                    db.add(new_child)
+                    db.commit()
+                    db.close()
                     st.success("Child registered successfully!")
-                else:
-                    st.error("Failed to register child.")
+                except Exception as e:
+                    st.error(f"Failed to register child: {e}")
 
     # --- POLICIES & PROCEDURES SECTION ---
     elif menu == "Policies & Procedures":
@@ -190,10 +202,9 @@ else:
     # --- PLACEHOLDERS FOR OTHER BACKEND FEATURES ---
     else:
         st.subheader(f"🛠️ {menu} Management Portal")
-        st.write(f"This module interacts directly with your FastAPI endpoints for **{menu}**.")
+        st.write(f"This module manages records for **{menu}**.")
         st.info("Use the form inputs below to record or retrieve data for this category.")
 
-        # Generic form placeholder so every menu option is fully functional
         with st.form(f"form_{menu}"):
             notes = st.text_input(f"Enter details for {menu}:")
             submitted = st.form_submit_button(f"Submit {menu}")
